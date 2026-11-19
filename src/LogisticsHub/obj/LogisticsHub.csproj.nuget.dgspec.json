@@ -1,0 +1,57 @@
+{
+  "format": 1,
+  "restore": {
+    "D:\\PY程序\\超大型物流站-MOD\\src\\LogisticsHub\\LogisticsHub.csproj": {}
+  },
+  "projects": {
+    "D:\\PY程序\\超大型物流站-MOD\\src\\LogisticsHub\\LogisticsHub.csproj": {
+      "version": "0.1.0",
+      "restore": {
+        "projectUniqueName": "D:\\PY程序\\超大型物流站-MOD\\src\\LogisticsHub\\LogisticsHub.csproj",
+        "projectName": "DSPLogisticsHub",
+        "projectPath": "D:\\PY程序\\超大型物流站-MOD\\src\\LogisticsHub\\LogisticsHub.csproj",
+        "packagesPath": "C:\\Users\\Administrator\\.nuget\\packages\\",
+        "outputPath": "D:\\PY程序\\超大型物流站-MOD\\src\\LogisticsHub\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\Administrator\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net472"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net472": {
+            "targetAlias": "net472",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net472": {
+          "targetAlias": "net472",
+          "dependencies": {
+            "Microsoft.NETFramework.ReferenceAssemblies": {
+              "suppressParent": "All",
+              "target": "Package",
+              "version": "[1.0.3, )"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.424\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}
