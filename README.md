@@ -5,6 +5,8 @@
 >
 > A station-grade logistics hub that also mines the planet it stands on. 12 belt ports,
 > 50 vessel berths, 22 turrets, a half-sphere shield, and geothermal wells under the base.
+>
+> **源码 / Source：** <https://github.com/bo5501/Aerial-Mining-Logistics-Station>
 
 ---
 
@@ -17,6 +19,8 @@
   每站 **50 艘星际货船 + 200 架物流运输机**（原版塔是 10 船 / 100 机）。
 - **22 座激光炮塔**：碟顶 18 座（电浆炮，单发 900 / 1.1 s）+ 基座 4 座（激光，单发 160 / 0.22 s），
   全部带三叉重炮模型与开火特效（能量束 + 炮口闪光）。
+  **监控范围**：黑雾只有进入对应范围才会被锁定攻击 —— 基座 140 m（对地）、碟顶 600 m（对空）。
+  碟顶电浆炮同样能打**太空中的黑雾舰队**（原版磁化电浆炮同一套目标换算与伤害分发）。
   伤害吃原版 **升级 → 能量武器伤害**（每级 +10%），与游戏里其他炮塔同一口径。
 - **43 m 半球能量护盾**：罩住整个碟形站体，样式照原版行星护盾。
 - **底座钻孔**：裙边钻齿咬进地面，钻出 **6 口地脉井**（碎石环 + 井口法兰 + 井底熔岩），
@@ -88,6 +92,9 @@ BepInEx 日志（`BepInEx/LogOutput.log`）里有完整的诊断行，例如：
 
 报问题时把这几行贴上来就行。
 
+**源码 / 问题反馈 / 版本更新：** <https://github.com/bo5501/Aerial-Mining-Logistics-Station>
+（Issues 里贴日志 + 存档版本，比在商店评论区问要快得多）
+
 ---
 
 ## English summary
@@ -106,3 +113,5 @@ A single building that replaces a logistics tower, miners, a geothermal plant an
 Requires BepInEx 5.4.17+, LDBTool 3.0.3+, CommonAPI 1.6.7+.
 Turret damage scales with the vanilla *Energy Weapon Damage* upgrade (+10% per level);
 mining speed, ore cost and geothermal output scale with *Mineral Exploitation*.
+
+Source code & issue tracker: <https://github.com/bo5501/Aerial-Mining-Logistics-Station>

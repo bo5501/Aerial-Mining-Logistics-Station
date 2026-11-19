@@ -68,13 +68,21 @@ namespace LogisticsHub
             // 「敌人没了/打不动，炮塔还在持续开火」）。
             public float[] Lock;
             public int[] Ignore;
+            /// <summary>0.9.40：黑名单对应目标的 astroId（行星本地 = 0）。</summary>
+            public int[] IgnoreAstro;
             public float[] IgnoreT;
         }
 
-        /// <summary>一个可打的目标：enemyPool 索引 + 世界坐标 + 相对站体底座的高度。</summary>
+        /// <summary>
+        /// 一个可打的目标。
+        /// 【0.9.40】AstroId = 0 表示行星本地敌人（factory.enemyPool）；&gt;0 表示
+        /// 星区敌人（factory.sector.enemyPool，黑雾母巢舰队），值为其 originAstroId ——
+        /// 伤害分发（SkillSystem.DamageObject）按它走星区分支。
+        /// </summary>
         private struct Tgt
         {
             public int Id;
+            public int AstroId;
             public Vector3 Pos;
             public bool Air;
             public float Height;
@@ -561,6 +569,7 @@ namespace LogisticsHub
                 rig.AIdx = new int[C.TurretCount + 4];
                 rig.Lock = new float[n];
                 rig.Ignore = new int[8];
+                rig.IgnoreAstro = new int[8];
                 rig.IgnoreT = new float[8];
                 rig.ScanTimer = 0f;
 
@@ -623,7 +632,10 @@ namespace LogisticsHub
                 }
                 if (plasmaCount > 0)
                     Plugin.Log.LogInfo("塔顶武器: " + plasmaCount + " 座换成原版磁化电浆炮（只打空中目标），" +
-                                       "基座 " + (n - plasmaCount) + " 座仍是高频激光塔（只打地面）");
+                                       "基座 " + (n - plasmaCount) + " 座仍是高频激光塔（只打地面）；" +
+                                       "监控范围：基座 " + C.TurretRange.ToString("0") + " m / 塔顶 " +
+                                       C.TurretRangeSpace.ToString("0") +
+                                       " m —— 黑雾只有进入对应范围才会被锁定攻击（0.9.40 起含太空黑雾舰队）");
 
                 // 光柱本体：原版黑雾中继站自带的那段特效网格（StationBeam 负责搬过来）。
                 // 不用 Graphics.DrawMesh，也不塞进建筑 prefab —— 普通 MeshRenderer ，
@@ -775,6 +787,19 @@ namespace LogisticsHub
         /// （黑雾正在孵化/生长的单位、剧情战里的单位）会被一直锁着打 ——
         /// 打不动、又永远不消失，实机上就是「敌人早没了，炮塔还在持续输出」。
         /// </summary>
+        /// <summary>
+        /// 扫一遍可打的目标（每 0.35 s 一次）。两个来源：
+        /// ① <c>factory.enemyPool</c> —— 行星本地敌人（黑雾基地刷出的地面/飞行单位）；
+        /// ② 【0.9.40】<c>factory.sector.enemyPool</c> —— 星区敌人（黑雾母巢舰队）。
+        ///
+        /// 为什么以前对太空舰队「没有任何效果」：舰队根本不在行星池里，② 从来没扫过；
+        /// 伤害入口 <see cref="Fire"/> 用的 DamageGroundObjectByLocalCaster 也只认行星池。
+        /// 原版磁化电浆炮（TurretComponent.Search_Plasma）是从 factory.spaceHashSystemDynamic
+        /// 读星区敌人的行星本地坐标来打 —— 但那个哈希只在 defenseSystem.turretEnableDefenseSpace
+        /// 打开时才更新（行星上造过原版电浆炮才会自动开），没造过的存档里是关的。
+        /// 所以这里不走哈希，直接把星区敌人经 TransformFromAstro → InverseTransformToAstro
+        /// 换算到行星本地坐标（与原版同一换算链），再按监控范围过滤。
+        /// </summary>
         private static int Scan(PlanetFactory factory, Vector3 origin, Tgt[] buf)
         {
             if (buf == null || factory.enemyPool == null)
@@ -793,7 +818,7 @@ namespace LogisticsHub
                     continue;
 
                 Vector3 p = (Vector3)e.pos;
-                // 星区坐标/异常坐标直接排除（这里只处理行星本地目标）
+                // 星区坐标/异常坐标直接排除（行星本地目标的坐标都在行星半径量级内）
                 if (Mathf.Abs(p.x) > 6000f || Mathf.Abs(p.z) > 6000f || Mathf.Abs(p.y) > 6000f)
                     continue;
 
@@ -807,53 +832,133 @@ namespace LogisticsHub
                 if (d2 > r * r)
                     continue;
 
-                var t = new Tgt { Id = i, Pos = p, Air = air, Height = height, Dist2 = d2 };
+                AddTgt(buf, ref n, new Tgt
+                {
+                    Id = i,
+                    Pos = p,
+                    Air = air,
+                    Height = height,
+                    Dist2 = d2,
+                });
+            }
 
-                if (n < buf.Length)
+            // ---- 【0.9.40】星区敌人：黑雾母巢舰队 / 中继站 ----
+            SpaceSector sector = factory.sector;
+            if (sector == null || sector.enemyPool == null)
+                return n;
+
+            EnemyData[] spool = sector.enemyPool;
+            int scur = Mathf.Min(spool.Length, sector.enemyCursor);
+            float radius = factory.planet != null ? factory.planet.realRadius : 200f;
+            Vector3 originDir = origin.normalized;
+
+            for (int i = 1; i < scur; i++)
+            {
+                ref EnemyData e = ref spool[i];
+                if (e.id != i || e.id <= 0 || e.isInvincible)
+                    continue;
+                // 只打母巢名下的目标：DamageObject 的星区分支按 target.astroId 扣
+                // sector.enemyPool 的血，astroId 不是母巢的打下去也分不对（原版
+                // Search_Plasma 选出来后写的就是 originAstroId）。
+                if (!sector.IsHiveAstro(e.originAstroId))
+                    continue;
+
+                // 星区坐标 → 行星本地坐标。e.pos 是它所属天体（astroId）的本地坐标，
+                // 先换到宇宙坐标，再换到本行星的本地坐标（与 DFSDynamicHashSystem.GameTick
+                // 完全同一套调用）。
+                VectorLF3 lpos = e.pos;
+                sector.TransformFromAstro_ref(e.astroId, out VectorLF3 upos, ref lpos);
+                sector.InverseTransformToAstro_ref(factory.planet.astroId, ref upos, out VectorLF3 lf);
+                Vector3 p = (Vector3)lf;
+                if (p.sqrMagnitude < 1e-4f || Mathf.Abs(p.x) > 6000f ||
+                    Mathf.Abs(p.z) > 6000f || Mathf.Abs(p.y) > 6000f)
+                    continue;
+
+                // 高度按「离地表的径向距离」算（星区敌人的 pos 是行星本地坐标，
+                // 不能像地面敌人那样只比 y 轴）。
+                float alt = p.magnitude - radius;
+                if (alt < -5f)
+                    continue;                       // 已沉进行星体（降落/回收中），不追
+
+                bool air = alt >= C.PlasmaAirHeight;
+                float r = air ? rgs : rg;
+                float d2 = (p - origin).sqrMagnitude;
+                if (d2 > r * r)
+                    continue;
+                // 高空目标再加一道视界粗判：行星另一侧的不追（本行星半径只有 ~200 m，
+                // 600 m 射程理论上能「隔着星球」锁到背面的舰队，原版靠俯仰角限制挡这个）。
+                if (air && Vector3.Dot(p.normalized, originDir) < -0.2f)
+                    continue;
+
+                AddTgt(buf, ref n, new Tgt
                 {
-                    buf[n++] = t;
-                }
-                else
-                {
-                    // 满了就顶掉最远的一个
-                    int worst = 0;
-                    for (int k = 1; k < n; k++)
-                        if (buf[k].Dist2 > buf[worst].Dist2)
-                            worst = k;
-                    if (d2 < buf[worst].Dist2)
-                        buf[worst] = t;
-                }
+                    Id = i,
+                    AstroId = e.originAstroId,
+                    Pos = p,
+                    Air = air,
+                    Height = alt,
+                    Dist2 = d2,
+                });
             }
             return n;
         }
 
-        /// <summary>目标是否还活着（每帧验一次，不用等下一次 Scan）。</summary>
-        private static bool Alive(PlanetFactory factory, int id)
+        /// <summary>候选表插入：满了就顶掉最远的一个。</summary>
+        private static void AddTgt(Tgt[] buf, ref int n, in Tgt t)
         {
-            if (factory == null || factory.enemyPool == null || id <= 0)
+            if (n < buf.Length)
+            {
+                buf[n++] = t;
+                return;
+            }
+            int worst = 0;
+            for (int k = 1; k < n; k++)
+                if (buf[k].Dist2 > buf[worst].Dist2)
+                    worst = k;
+            if (t.Dist2 < buf[worst].Dist2)
+                buf[worst] = t;
+        }
+
+        /// <summary>
+        /// 目标是否还活着（每帧验一次，不用等下一次 Scan）。
+        /// 【0.9.40】astroId &gt; 0 时验星区池，否则验行星池。
+        /// </summary>
+        private static bool Alive(PlanetFactory factory, int id, int astroId)
+        {
+            if (factory == null || id <= 0)
                 return false;
+            if (astroId > 0)
+            {
+                SpaceSector sector = factory.sector;
+                if (sector == null || sector.enemyPool == null || id >= sector.enemyPool.Length)
+                    return false;
+                return sector.enemyPool[id].id == id && !sector.enemyPool[id].isInvincible;
+            }
+
             EnemyData[] pool = factory.enemyPool;
-            if (id >= pool.Length)
+            if (pool == null || id >= pool.Length)
                 return false;
             return pool[id].id == id && !pool[id].isInvincible;
         }
 
-        /// <summary>把一个「打不死」的目标记进黑名单（环形 8 槽，到点自动失效）。</summary>
-        private static void IgnoreAdd(Rig rig, int id)
+        /// <summary>把一个「打不死」的目标记进黑名单（环形 8 槽，到点自动失效）。槽位按 id+astroId 区分，行星/星区两个池的索引互不干扰。</summary>
+        private static void IgnoreAdd(Rig rig, int id, int astroId)
         {
             if (id <= 0 || rig.Ignore == null)
                 return;
-            int slot = id % rig.Ignore.Length;
+            int slot = (id * 31 + astroId) % rig.Ignore.Length;
             rig.Ignore[slot] = id;
+            rig.IgnoreAstro[slot] = astroId;
             rig.IgnoreT[slot] = Time.time + C.TurretGiveUpHold;
         }
 
-        private static bool Ignored(Rig rig, int id)
+        private static bool Ignored(Rig rig, int id, int astroId)
         {
             if (rig.Ignore == null || id <= 0)
                 return false;
-            int slot = id % rig.Ignore.Length;
-            return rig.Ignore[slot] == id && Time.time < rig.IgnoreT[slot];
+            int slot = (id * 31 + astroId) % rig.Ignore.Length;
+            return rig.Ignore[slot] == id && rig.IgnoreAstro[slot] == astroId &&
+                   Time.time < rig.IgnoreT[slot];
         }
 
         /// <summary>炮口世界坐标：电浆炮取枪身上的炮口点，激光塔取中管管口。</summary>
@@ -900,7 +1005,7 @@ namespace LogisticsHub
                 rig.AN = 0;
                 for (int k = 0; k < rig.CandCount; k++)
                 {
-                    if (Ignored(rig, rig.Candidates[k].Id))
+                    if (Ignored(rig, rig.Candidates[k].Id, rig.Candidates[k].AstroId))
                         continue;
                     if (rig.Candidates[k].Air)
                         rig.AIdx[rig.AN++] = k;
@@ -927,7 +1032,7 @@ namespace LogisticsHub
 
                 // 【0.9.24】每帧验一次目标：死了 / 变无敌 / 没了，立刻收射线去扫掠，
                 // 不再等下一次 Scan（0.35 s）—— 实机上那 0.35 s 就是「敌人没了还在打」。
-                if (!Alive(factory, tg.Id))
+                if (!Alive(factory, tg.Id, tg.AstroId))
                 {
                     rig.TargetEnemy[t] = -1;
                     LaserStop(rig, t);           // 目标已经出池，射线也要收（Stop 会让池自己淡出回收）
@@ -949,7 +1054,7 @@ namespace LogisticsHub
                     if (rig.Lock[t] > C.TurretGiveUpSeconds)
                     {
                         rig.Lock[t] = 0f;
-                        IgnoreAdd(rig, tg.Id);
+                        IgnoreAdd(rig, tg.Id, tg.AstroId);
                         LaserStop(rig, t);
                         rig.TargetEnemy[t] = -1;
                         rig.ScanTimer = 0f;
@@ -1036,7 +1141,7 @@ namespace LogisticsHub
                         continue;
                     LogPlasmaDamage(dmg);
                 }
-                Fire(factory, tg.Id, dmg);
+                Fire(factory, tg.Id, tg.AstroId, dmg);
             }
         }
 
@@ -1052,24 +1157,52 @@ namespace LogisticsHub
         }
 
         /// <summary>
-        /// 实际扣血。走原版 <c>SkillSystem.DamageGroundObjectByLocalCaster</c> ——
-        /// 这是原版高频激光塔打地面敌人用的同一个入口：内部处理黑雾基地等级减伤、
-        /// combatStats 血量、lastCaster 仇恨，死亡由战斗系统下一 tick 收尾。
-        /// 自己动 CombatStat.hp 会漏掉死亡流程，尸体会留在场上。
+        /// 实际扣血，按目标归属分两条路（口径与原版完全一致）：
+        ///
+        /// · 行星本地（astroId == 0）→ <c>SkillSystem.DamageGroundObjectByLocalCaster</c>：
+        ///   原版高频激光塔打地面敌人用的同一个入口，内部处理黑雾基地等级减伤、
+        ///   combatStats 血量、lastCaster 仇恨，死亡由战斗系统下一 tick 收尾。
+        ///   自己动 CombatStat.hp 会漏掉死亡流程，尸体会留在场上。
+        ///
+        /// · 【0.9.40】星区敌人（astroId &gt; 0，黑雾母巢舰队）→
+        ///   <c>SkillSystem.DamageObject</c>：原版磁化电浆炮 Shoot_Plasma 的弹丸命中后
+        ///   走的就是这个分发 —— 按 target.astroId 判定归属，母巢目标扣
+        ///   sector.enemyPool 的血（带巢等级减伤、加巢经验）。以前只会走上面的
+        ///   行星入口，所以对太空舰队「没有任何效果」。caster 用
+        ///   (None, id=0)：DamageObject 里 caster.id&gt;0 才会回头查建筑实体，
+        ///   我们没有实体，置 0 让它跳过仇恨/统计即可（母巢经验照加）。
         /// </summary>
-        private void Fire(PlanetFactory factory, int enemyId, int dmg)
+        private void Fire(PlanetFactory factory, int enemyId, int astroId, int dmg)
         {
             try
             {
-                SkillTargetLocal target = new SkillTargetLocal();
-                target.type = ETargetType.Enemy;
-                target.id = enemyId;
+                if (astroId > 0)
+                {
+                    SkillTarget target = new SkillTarget
+                    {
+                        type = ETargetType.Enemy,
+                        id = enemyId,
+                        astroId = astroId,
+                    };
+                    SkillTarget caster = new SkillTarget
+                    {
+                        type = ETargetType.None,
+                        id = 0,
+                        astroId = factory.planet != null ? factory.planet.astroId : 0,
+                    };
+                    factory.skillSystem.DamageObject(dmg, 1, ref target, ref caster);
+                    return;
+                }
 
-                SkillTargetLocal caster = new SkillTargetLocal();
-                caster.type = ETargetType.Entity;
-                caster.id = 0;
+                SkillTargetLocal targetL = new SkillTargetLocal();
+                targetL.type = ETargetType.Enemy;
+                targetL.id = enemyId;
 
-                factory.skillSystem.DamageGroundObjectByLocalCaster(factory, dmg, 1, ref target, ref caster);
+                SkillTargetLocal casterL = new SkillTargetLocal();
+                casterL.type = ETargetType.Entity;
+                casterL.id = 0;
+
+                factory.skillSystem.DamageGroundObjectByLocalCaster(factory, dmg, 1, ref targetL, ref casterL);
             }
             catch (Exception e)
             {

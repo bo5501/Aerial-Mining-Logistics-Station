@@ -10,7 +10,7 @@ namespace LogisticsHub
     {
         public const string Guid = "com.psd.logisticshub";
         public const string Name = "空中采矿机物流运输站";
-        public const string Version = "0.9.39";
+        public const string Version = "0.9.40";
 
         // ---- id 分配（避开「星际能量枢纽塔」666/8000/300 与本体重载区间）----
         public const int ModelId = 673;
@@ -393,10 +393,14 @@ namespace LogisticsHub
         // 基座 4 座照「高频激光塔」：对地，射程短、伤害中等、连发快，射线是连续激光；
         // 塔顶 18 座照「磁化电浆炮」：只打空中/太空目标，射程远、单发重、间隔长，弹丸是电浆炮。
         public const bool TurretCombat = true;
-        public const float TurretRange = 140f;          // 对地射程（m）
+        // 【0.9.40】监控范围（玩家口中的「只有黑雾进圈才开打」就是这两条）：
+        // 目标每 0.35 s 扫一次，超出对应圈的直接不进候选表 —— 基座激光塔不打圈外
+        // 的地面黑雾，塔顶电浆炮不打 600 m 外的空中/太空目标（原版磁化电浆炮
+        // Search_Plasma 也是同款「先按 turretSpaceAttackRange 过滤」的口径）。
+        public const float TurretRange = 140f;          // 基座激光塔监控范围（m，只打地面目标）
         public const int TurretDamage = 160;            // 对地单发伤害
         public const float TurretFireInterval = 0.22f;  // 对地射击间隔（s）
-        public const float TurretRangeSpace = 600f;     // 电浆炮射程（m，打天上的目标）
+        public const float TurretRangeSpace = 600f;     // 塔顶电浆炮监控范围（m，打空中/太空目标）
         public const int TurretDamageSpace = 900;       // 电浆炮单发伤害
         public const float TurretFireIntervalSpace = 1.10f;
         /// <summary>

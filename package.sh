@@ -47,7 +47,7 @@ cat > "$STAGE/manifest.json" <<JSON
 {
   "name": "$NAME",
   "version_number": "$VERSION",
-  "website_url": "",
+  "website_url": "https://github.com/bo5501/Aerial-Mining-Logistics-Station",
   "description": "空中采矿机物流运输站：底座钻孔采全星球的矿脉/原油/海洋，地热 6MW 自发电；50 泊位停靠环、22 座炮塔、43m 半球护盾；站体窗口 20 格 50 万 + 100MW 核电。",
   "dependencies": [
     "xiaoye97-BepInEx-5.4.17",

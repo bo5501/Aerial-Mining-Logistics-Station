@@ -1310,8 +1310,10 @@ namespace LogisticsHub
                 "A station-grade logistics hub that also mines the planet it stands on.\n" +
                 "12 belt ports around the base; 50 vessel berths on two docking decks (2 x 25, " +
                 "6.3 m apart); 16 low-altitude drone launch lanes; 22 laser turrets (18 on the " +
-                "saucer, 4 on the base) and a 43 m half-sphere shield. 50 interstellar vessels " +
-                "and 200 logistics drones per station.\n" +
+                "saucer, 4 on the base) and a 43 m half-sphere shield. Turrets only engage " +
+                "enemies inside their watch range - 140 m for the 4 base lasers (ground), " +
+                "600 m for the 18 saucer plasma cannons (air and Dark Fog space fleets). " +
+                "50 interstellar vessels and 200 logistics drones per station.\n" +
                 "A thin energy column rises from the drill base and holds the saucer at 82 m, " +
                 "matching the Dark Fog relay station's hovering height; four thinner bands circle " +
                 "it and carry cargo and command pulses between base and hub.\n" +
@@ -1327,6 +1329,8 @@ namespace LogisticsHub
                 "基座 12 个传送带接口（每条边中心 1 个，径向朝外）；上下两层停靠环各 25 个泊位" +
                 "（间距 6.3 m）；低空 16 条运输机发射道；" +
                 "22 座激光炮塔（碟顶 18 + 基座 4）与半径 43 m 的半球能量护盾。" +
+                "炮塔只攻击进入监控范围的黑雾：基座 4 座激光塔 140 m（对地），" +
+                "碟顶 18 座电浆炮 600 m（对空，含太空中的黑雾舰队）。" +
                 "每站 50 艘星际货船、200 架物流运输机。\n" +
                 "基座是一台钻孔机：裙边钻齿咬进地面、地面被钻出 6 口地脉井（碎石环 + 井口法兰 + " +
                 "井底熔岩），井口三根抽取管斜插回基座，24 条熔岩裂缝从基座往外辐射；" +
