@@ -1162,20 +1162,76 @@ namespace LogisticsHub
     }
 
     /// <summary>
-    /// 【0.9.15】新档的 <c>techStates</c> 是刚 new 出来的空表，本 mod 科技在里面没有条目；
-    /// 读档同理（Import 也是重建）。这里两个入口后面都补一次，否则节点看着正常，
-    /// 一研究就会在 <c>techStates[id]</c> 上下标越界 / KeyNotFound。
+    /// 【0.9.42 修「存档显示无效 / 存档损坏」】**绝对不能在 <c>GameHistoryData.Init</c> 里补建
+    /// <c>techStates</c>**（0.9.15 起就是这么干的，0.9.41 之前一直埋着这颗雷）。
+    ///
+    /// 原版 <c>GameData.Import</c> 的顺序是：
+    /// <code>
+    /// this.history = new GameHistoryData();
+    /// this.history.Init(this);    // 只把 techStates 换成空字典
+    /// this.history.Import(r);     // 逐条 techStates.Add(...)
+    /// </code>
+    /// 而 <c>GameHistoryData.Import</c> 对存档里每条科技状态是**不判重、直接 Add**：
+    /// <code>
+    /// if (techProto != null) this.techStates.Add(num9, techState);
+    /// </code>
+    /// 我们在 Init 之后先把 1997 塞进去，Import 再读到存档里那条 1997，就是
+    /// <c>ArgumentException: An item with the same key has already been added</c>：
+    ///   · 点「加载」：异常冒到 <c>GameSave.LoadCurrentGame</c> 被 catch → 返回 false →
+    ///     GameMain 自毁 → GameLoader 弹 <b>「无效存档 / 加载存档失败」</b>；
+    ///   · 读档窗口选中存档时走 <c>GameData.ImportGamePropertyData</c>（预览导入，同样是
+    ///     Init + Import）→ 异常 → 右侧详情显示 <b>「存档损坏」</b>。
+    ///
+    /// 存档里有没有 1997，取决于「这份存档是不是本 mod 写过的」：本 mod 写过的存档一定有
+    /// （Init 补建的那一条会被 <c>GameHistoryData.Export</c> 原样写进去），所以
+    /// <b>用本 mod 存一次档，之后就读不开了</b>；反过来 0.9.39 之前写下、还没被本 mod
+    /// 覆写过的老存档能读 —— 这就是「0.9.39 看着正常」的假象。
+    ///
+    /// 现在的时机照 ProjectGenesis：<c>Init</c> 保持原样（空字典交给 Import 填），
+    /// 在整个 <c>GameData.Import</c> 跑完之后再兜底补建（<see cref="Patch_GameDataImport"/>，
+    /// 对应它的 <c>InitialTechPatches.Import</c>），新档用 <c>SetForNewGame</c> 收尾。
     /// </summary>
-    [HarmonyPatch(typeof(GameHistoryData), nameof(GameHistoryData.Init))]
-    internal static class Patch_HistoryInit
+    [HarmonyPatch(typeof(GameData), nameof(GameData.Import))]
+    internal static class Patch_GameDataImport
     {
-        private static void Postfix(GameHistoryData __instance) => Protos.EnsureTechState(__instance);
+        private static void Postfix(GameData __instance)
+        {
+            if (__instance != null && !DSPGame.IsMenuDemo)
+                Protos.EnsureTechState(__instance.history);
+        }
     }
 
+    /// <summary>
+    /// 新档：原版 <c>SetForNewGame</c> 会按 <c>LDB.techs.dataArray</c> 逐条建状态，本 mod
+    /// 科技只要那时已经在表里就自然带上；这里是「科技注册晚于新档初始化」时的兜底。
+    /// </summary>
+    [HarmonyPatch(typeof(GameData), nameof(GameData.SetForNewGame))]
+    internal static class Patch_GameDataSetForNewGame
+    {
+        private static void Postfix(GameData __instance)
+        {
+            if (__instance != null && !DSPGame.IsMenuDemo)
+                Protos.EnsureTechState(__instance.history);
+        }
+    }
+
+    /// <summary>
+    /// 读档：<c>GameHistoryData.Import</c> 正常跑完后兜底一次（原版已经按 LDB 全表补过，
+    /// 这里只兜「Import 时科技还不在表里」的极端情况）。
+    ///
+    /// 只对**真正的游戏历史**生效：读档窗口预览会 <c>new</c> 一个临时 GameHistoryData
+    /// （<c>GameData.ImportGamePropertyData</c>），往那上面写没有意义，还会让
+    /// 「科技状态补建」日志刷屏 —— 这个预览实例必须和真实存档数据完全隔离。
+    /// </summary>
     [HarmonyPatch(typeof(GameHistoryData), nameof(GameHistoryData.Import))]
     internal static class Patch_HistoryImport
     {
-        private static void Postfix(GameHistoryData __instance) => Protos.EnsureTechState(__instance);
+        private static void Postfix(GameHistoryData __instance)
+        {
+            GameData d = GameMain.data;
+            if (d != null && ReferenceEquals(__instance, d.history))
+                Protos.EnsureTechState(__instance);
+        }
     }
 
     /// <summary>
@@ -1377,6 +1433,133 @@ namespace LogisticsHub
             catch (Exception e)
             {
                 Plugin.Log.LogWarning("核电燃料格: 换棒补丁异常 — " + e.Message);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 【0.9.41】开局「跳过序章 / 开始序章」的就绪守卫。
+    /// <para>
+    /// 崩溃现场（ErrorAnalyzer 报告，13 mod 环境）：
+    /// <c>GameLoader.FixedUpdate → GameData.SkipStandardModeGuide →
+    /// GuideMissionStandardMode.Skip → NullReferenceException</c>。
+    /// </para>
+    /// <para>
+    /// 根因不在我们，但和我们同环境的组合会触发：BulletTime 的「快速加载」Transpiler 把
+    /// frame 7 的等待条件 <c>localStar != null &amp;&amp; !localStar.loaded</c> 里的
+    /// <c>StarData.loaded</c> 换成了 <c>GameMain.localPlanet?.loaded ?? true</c> ——
+    /// <b>localPlanet 尚未赋值时该条件恒为 true，frame 7 的等待被完全绕过</b>；
+    /// 原版第二道闸（<c>localPlanet != null &amp;&amp; !localPlanet.factoryLoaded</c>）
+    /// 在 localPlanet 为 null 时同样放行。于是 frame 9 一到就执行
+    /// <c>SkipStandardModeGuide()</c>，而 <c>GuideMissionStandardMode.Skip</c> 第一段就要
+    /// <c>localPlanet.birthPoint</c> / <c>localPlanet.factory.FlattenTerrain(...)</c> → NRE。
+    /// </para>
+    /// <para>
+    /// 修法：前缀里检查就绪条件（mainPlayer / localPlanet / factory 都非空），不就绪就
+    /// 拦下这次调用并登记 pending；<c>GameMain.FixedUpdate</c> 的 postfix 里每帧重试，
+    /// 星球一就绪立刻补发（此时仍在游戏最初几 tick，行为与原版 frame 9 等价）。
+    /// 两个入口（Skip / Start）都守，Start 的 NRE 风险相同。
+    /// </para>
+    /// </summary>
+    [HarmonyPatch(typeof(GameData), "SkipStandardModeGuide")]
+    internal static class Patch_GuideSkipGuard
+    {
+        internal static Action _pending;     // 待补发的原版调用
+        internal static GameData _owner;     // pending 归属的 GameData（防止回主菜单/换档后串档）
+        internal static float _expireAt;     // 超过 30 秒仍不就绪就放弃并报错
+
+        internal static bool Ready(GameData g)
+        {
+            return g != null && g.mainPlayer != null &&
+                   g.localPlanet != null && g.localPlanet.factory != null;
+        }
+
+        internal static void Defer(GameData g, Action vanillaCall, string what)
+        {
+            _pending = vanillaCall;
+            _owner = g;
+            _expireAt = Time.unscaledTime + 30f;
+            Plugin.Log.LogWarning("开局引导: localPlanet/factory 尚未就绪，" + what +
+                                 "的调用已推迟到星球加载完成后自动执行" +
+                                 "（防 BulletTime 快速加载抢跑 NRE）");
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.High)]
+        private static bool Prefix(GameData __instance)
+        {
+            try
+            {
+                if (Ready(__instance))
+                    return true;                     // 正常路径：放行原版
+
+                // 拦下这次调用；postfix 补发时直接调 __instance.SkipStandardModeGuide()，
+                // 会再次进本前缀 —— 届时 Ready 已成立，自然放行，不会死循环。
+                Defer(__instance, () => __instance.SkipStandardModeGuide(), "跳过序章");
+                return false;
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("开局引导守卫异常: " + e);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>每帧重试挂点：GameMain.FixedUpdate 只在 Begin 之后跑，正好覆盖补发窗口。</summary>
+    [HarmonyPatch(typeof(GameMain), "FixedUpdate")]
+    internal static class Patch_GuideRetry
+    {
+        private static void Postfix()
+        {
+            if (Patch_GuideSkipGuard._pending == null)
+                return;
+
+            Action act = Patch_GuideSkipGuard._pending;
+            GameData d = GameMain.data;
+            if (d == null || !ReferenceEquals(d, Patch_GuideSkipGuard._owner))
+            {
+                Patch_GuideSkipGuard._pending = null;    // 回主菜单 / 换档：作废
+                return;
+            }
+
+            if (GameMain.gameTick > 1 || Time.unscaledTime > Patch_GuideSkipGuard._expireAt)
+            {
+                Patch_GuideSkipGuard._pending = null;
+                Plugin.Log.LogError("开局引导: 星球迟迟未就绪，放弃补发开局引导" +
+                                    "（gameTick=" + GameMain.gameTick + "）。如复现请反馈日志。");
+                return;
+            }
+
+            if (!Patch_GuideSkipGuard.Ready(d))
+                return;                              // 继续等
+
+            Patch_GuideSkipGuard._pending = null;
+            Plugin.Log.LogInfo("开局引导: 星球已就绪，补发开局引导调用");
+            try { act(); }
+            catch (Exception e) { Plugin.Log.LogError("开局引导补发失败: " + e); }
+        }
+    }
+
+    /// <summary>StartStandardModeGuide 与 Skip 同一条链、同样的 NRE 风险，走同一套守卫。</summary>
+    [HarmonyPatch(typeof(GameData), "StartStandardModeGuide")]
+    internal static class Patch_GuideStartGuard
+    {
+        private static bool Prefix(GameData __instance)
+        {
+            try
+            {
+                if (Patch_GuideSkipGuard.Ready(__instance))
+                    return true;
+
+                Patch_GuideSkipGuard.Defer(__instance,
+                    () => __instance.StartStandardModeGuide(), "开始序章");
+                return false;
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogError("开局引导守卫异常: " + e);
                 return true;
             }
         }

@@ -4,6 +4,46 @@
 
 ---
 
+## 0.9.42
+
+**修：加载本 MOD 后存档显示「无效 / 损坏」——本 mod 写过的存档读不回来**
+
+- 现象：装上本 MOD 后，存档列表里选中某份存档右侧显示「存档损坏」，
+  点「加载」则弹「无效存档 / 加载存档失败」，只能停在主菜单。
+  用 0.9.39 时正常，0.9.40 / 0.9.41 反复出现 —— 其实是**存档只要被本 mod 写过一次就会中招**。
+- 根因（`GameHistoryData.Init` 补建科技状态的时机错了）：
+  原版 `GameData.Import` 的顺序是 `history.Init()`（只把 `techStates` 换成空字典）
+  → `history.Import()`（把存档里的条目**不判重直接 `Add`**）。
+  本 mod 0.9.15 起在 `Init` 之后就把自己的科技 1997 塞进 `techStates`，而
+  `GameHistoryData.Export` 会把这张表原样写进存档，于是下一次读档：
+  `Init` 先补一条 1997 → `Import` 又读到存档里的 1997 → `Add` 撞键抛
+  `ArgumentException: 已添加了具有相同键的项`：
+  - 正常读档：异常被 `GameSave.LoadCurrentGame` 吞掉 → 返回 false → 弹「无效存档」；
+  - 读档窗口选中存档（`GameData.ImportGamePropertyData` 预览导入，同一套 Init+Import）
+    → 详情显示「存档损坏」。
+  所以老存档（之前没被本 mod 写过的）能读、刚存的读不回来，看起来就像「升到 0.9.40 才坏」。
+- 修法（照 ProjectGenesis 的时机）：
+  - **删掉 `GameHistoryData.Init` 的后缀**，`Init` 恢复成原版语义（交给 `Import` 填表）；
+  - 改成 `GameData.Import` / `GameData.SetForNewGame` 结束后兜底补建；
+  - `GameHistoryData.Import` 的后缀只对**真实游戏历史**生效，不再碰读档窗口的预览实例；
+  - 写回改用索引器，重复调用只会覆盖同样的初始值，不会再抛异常把读档带崩。
+- 已存在的存档**没有损坏**，装 0.9.42 后可直接读回来。
+
+## 0.9.41
+
+**修：开局跳过序章 NullReferenceException（与 BulletTime 快速加载冲突）**
+
+- 崩溃点：`GameLoader.FixedUpdate → GameData.SkipStandardModeGuide →
+  GuideMissionStandardMode.Skip`。
+- 根因：BulletTime 的「快速加载」把 frame 7 的等待条件换成
+  `GameMain.localPlanet?.loaded ?? true`——localPlanet 尚未赋值时恒为 true，
+  星球加载等待被完全绕过，frame 9 就执行跳过序章，此时 `localPlanet`/`factory`
+  还没就绪 → NRE。
+- 修复：本 mod 加就绪守卫——`mainPlayer`/`localPlanet`/`factory` 任一为空时
+  拦下这次调用，等星球加载完成（`GameMain.FixedUpdate` 内重试）后自动补发，
+  行为与原版 frame 9 等价；「开始序章」入口同样守护。
+- 30 秒仍不就绪则放弃补发并报错，不会卡死加载。
+
 ## 0.9.40
 
 **炮塔监控范围 + 修「打太空黑雾舰队没有任何效果」**

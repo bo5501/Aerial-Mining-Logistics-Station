@@ -10,7 +10,7 @@ namespace LogisticsHub
     {
         public const string Guid = "com.psd.logisticshub";
         public const string Name = "空中采矿机物流运输站";
-        public const string Version = "0.9.40";
+        public const string Version = "0.9.42";
 
         // ---- id 分配（避开「星际能量枢纽塔」666/8000/300 与本体重载区间）----
         public const int ModelId = 673;

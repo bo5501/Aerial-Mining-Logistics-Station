@@ -268,12 +268,21 @@ namespace LogisticsHub
         }
 
         /// <summary>
-        /// 保证当前存档的 <c>techStates</c> 里有本 mod 科技。新档走 <c>GameHistoryData.Init</c>、
-        /// 读档走 <c>Import</c>，都会把这张表重建，所以两个入口后面都要补一次
-        /// （见 Patch_HistoryInit / Patch_HistoryImport）。缺了会：
+        /// 保证当前存档的 <c>techStates</c> 里有本 mod 科技。缺了会：
         ///   ① 科技永远判成未解锁；
         ///   ② 原版 UITechNode 选中节点时 <c>techStates[id]</c> 直接下标取值 → KeyNotFoundException；
         ///   ③ AlterCurrentTech 写 hashNeeded 时同样崩。
+        ///
+        /// **调用时机是硬约束（0.9.42 存档事故的根因）**：只能在「表已经建好」之后调，
+        /// 也就是 <c>GameHistoryData.Import</c> 跑完 / <c>GameData.SetForNewGame</c> 之后，
+        /// 见 Patch_GameDataImport / Patch_GameDataSetForNewGame / Patch_HistoryImport。
+        /// <b>绝不能挂在 <c>GameHistoryData.Init</c> 上</b>：Init 只负责把字典清空，
+        /// 紧接着的 <c>Import</c> 对存档里的条目是不判重直接 <c>Add</c> 的，
+        /// 我们先塞一条进去 = 读档时 <c>ArgumentException: 已添加了具有相同键的项</c>
+        /// → 整次读档失败（「无效存档」/「存档损坏」）。
+        ///
+        /// 另外写回一律用索引器而不是 <c>Add</c>：多一个入口（别的 mod 也补过、
+        /// 或同一帧被调两次）也只是覆盖成同样的初始状态，不会抛异常把读档带崩。
         /// </summary>
         public static void EnsureTechState(GameHistoryData h = null)
         {
@@ -297,16 +306,16 @@ namespace LogisticsHub
                                 h.techStates[OldTechId].unlocked;
                 if (migrated)
                 {
-                    h.techStates.Add(id, new TechState(true, tech.MaxLevel, tech.MaxLevel, 0L, 0L, 0)
-                    { unlockTick = GameMain.gameTick });
+                    h.techStates[id] = new TechState(true, tech.MaxLevel, tech.MaxLevel, 0L, 0L, 0)
+                    { unlockTick = GameMain.gameTick };
                     Plugin.Log.LogInfo("科技状态迁移: 旧 ID " + OldTechId + " 已解锁 → 新 ID " + id);
                 }
                 else
                 {
                     // 字段口径照 GameHistoryData.Import：curLevel = Level、maxLevel = MaxLevel、
                     // hashNeeded = GetHashNeeded(Level)（两个 coef 都是 0，等于 HashNeeded）。
-                    h.techStates.Add(id, new TechState(false, tech.Level, tech.MaxLevel, 0L,
-                                                      tech.GetHashNeeded(tech.Level), 0));
+                    h.techStates[id] = new TechState(false, tech.Level, tech.MaxLevel, 0L,
+                                                    tech.GetHashNeeded(tech.Level), 0);
                     Plugin.Log.LogInfo("科技状态补建: id=" + id + " 需要 hash=" + tech.GetHashNeeded(tech.Level));
                 }
             }
