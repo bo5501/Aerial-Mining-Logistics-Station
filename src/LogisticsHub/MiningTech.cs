@@ -227,11 +227,16 @@ namespace LogisticsHub
             // 混在「采矿科技」那行里会让人以为升级 3606 也能提伤害。
             if (mulChanged)
             {
+                // 0.9.45：和面板/实际开火同口径 —— 再乘一层玩家配置 Turret/DamageMul。
                 Plugin.Log.LogInfo("能量武器: ×" + energy.ToString("0.00") +
-                                   "（原版「能量武器伤害」升级，每级 +10%）→ 激光单发 " +
-                                   Mathf.RoundToInt(C.TurretDamage * energy) +
+                                   "（原版「能量武器伤害」升级，每级 +10%）" +
+                                   (Mathf.Abs(Plugin.DamageMul - 1f) > 0.001f
+                                       ? " × 配置 " + Plugin.DamageMul.ToString("0.00")
+                                       : "") +
+                                   " → 激光单发 " +
+                                   Mathf.RoundToInt(C.TurretDamage * energy * Plugin.DamageMul) +
                                    " · 电浆单发 " +
-                                   Mathf.RoundToInt(C.TurretDamageSpace * energy) +
+                                   Mathf.RoundToInt(C.TurretDamageSpace * energy * Plugin.DamageMul) +
                                    "　[history.energyDamageScale=" + energy.ToString("0.000") + "]");
             }
         }

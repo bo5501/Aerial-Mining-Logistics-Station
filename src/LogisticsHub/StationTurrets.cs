@@ -110,6 +110,8 @@ namespace LogisticsHub
         private bool _shellErr;
         /// <summary>0.9.25：电浆炮电量不足停火，只打一次日志。</summary>
         private bool _noAmmoLogged;
+        /// <summary>0.9.46：基座激光电量不足停火，只打一次日志。</summary>
+        private bool _laserNoAmmoLogged;
         /// <summary>0.9.26：上一次记过日志的能量武器倍率（电浆炮伤害变化时打一行）。</summary>
         private float _plasmaMul = -1f;
         /// <summary>0.9.29：上一次记过日志的塔顶供电状态（断电位 ×10000 + 总功率 MW）。</summary>
@@ -631,11 +633,13 @@ namespace LogisticsHub
                     rig.Angle[i] = 0f;
                 }
                 if (plasmaCount > 0)
-                    Plugin.Log.LogInfo("塔顶武器: " + plasmaCount + " 座换成原版磁化电浆炮（只打空中目标），" +
+                    Plugin.Log.LogInfo("塔顶武器: " + plasmaCount + " 座换成原版磁化电浆炮（只打空中/太空目标），" +
                                        "基座 " + (n - plasmaCount) + " 座仍是高频激光塔（只打地面）；" +
                                        "监控范围：基座 " + C.TurretRange.ToString("0") + " m / 塔顶 " +
-                                       C.TurretRangeSpace.ToString("0") +
-                                       " m —— 黑雾只有进入对应范围才会被锁定攻击（0.9.40 起含太空黑雾舰队）");
+                                       SpaceRange().ToString("0") +
+                                       " m（0.9.43 起塔顶射程按原版磁化电浆炮 prefab 口径，" +
+                                       "不再写死 600 m）—— 黑雾只有进入对应范围才会被锁定攻击" +
+                                       "（0.9.40 起含太空黑雾舰队；中继站默认不打，见配置 Turret/AttackRelay）");
 
                 // 光柱本体：原版黑雾中继站自带的那段特效网格（StationBeam 负责搬过来）。
                 // 不用 Graphics.DrawMesh，也不塞进建筑 prefab —— 普通 MeshRenderer ，
@@ -771,23 +775,6 @@ namespace LogisticsHub
         }
 
         /// <summary>
-        /// 目标扫描：每 0.35 s 扫一遍 <c>factory.enemyPool</c>，只留最近的 N 个。
-        ///
-        /// 【0.9.24】射程按「相对高度」分成两档，和武器分家对齐：
-        ///   · 高出站体底座 <see cref="C.PlasmaAirHeight"/> 的算空中目标，归塔顶电浆炮，
-        ///     射程 <see cref="C.TurretRangeSpace"/>；
-        ///   · 贴地的归基座激光塔，射程 <see cref="C.TurretRange"/>。
-        ///
-        /// 为什么必须节流：enemyPool 在中等规模的黑雾战里就有上千个元素，
-        /// 22 座塔每帧各扫一遍 = 每帧两万次距离计算，帧率会掉。
-        ///
-        /// 【0.9.24】同时补上原版炮塔的「目标合法性」判定：
-        /// <c>TurretComponent</c> 选目标时要求 <c>id == index &amp;&amp; !isInvincible</c>（见
-        /// TurretComponent.cs 的 Search 分支），我们之前只看 id，于是**无敌目标**
-        /// （黑雾正在孵化/生长的单位、剧情战里的单位）会被一直锁着打 ——
-        /// 打不动、又永远不消失，实机上就是「敌人早没了，炮塔还在持续输出」。
-        /// </summary>
-        /// <summary>
         /// 扫一遍可打的目标（每 0.35 s 一次）。两个来源：
         /// ① <c>factory.enemyPool</c> —— 行星本地敌人（黑雾基地刷出的地面/飞行单位）；
         /// ② 【0.9.40】<c>factory.sector.enemyPool</c> —— 星区敌人（黑雾母巢舰队）。
@@ -799,6 +786,11 @@ namespace LogisticsHub
         /// 打开时才更新（行星上造过原版电浆炮才会自动开），没造过的存档里是关的。
         /// 所以这里不走哈希，直接把星区敌人经 TransformFromAstro → InverseTransformToAstro
         /// 换算到行星本地坐标（与原版同一换算链），再按监控范围过滤。
+        ///
+        /// 【0.9.43 修「塔顶武器不会攻击太空黑雾」】0.9.40 的塔顶射程写死 600 m，
+        /// 而黑雾舰队在 1000~6000 m 的轨道上就开始对地炮击，600 m 永远够不到；
+        /// 现在射程改读原版磁化电浆炮 prefab 的 <c>turretSpaceAttackRange</c>（6500 m），
+        /// 星区目标也一律归塔顶电浆炮（不再按高度错分给 140 m 的基座激光塔）。
         /// </summary>
         private static int Scan(PlanetFactory factory, Vector3 origin, Tgt[] buf)
         {
@@ -809,7 +801,12 @@ namespace LogisticsHub
             int n = 0;
             int cursor = Mathf.Min(pool.Length, factory.enemyCursor);
             float rg = C.TurretRange;
-            float rgs = C.TurretRangeSpace;
+            // 【0.9.43】塔顶射程不再写死：读原版磁化电浆炮 prefab 的 turretSpaceAttackRange
+            // （0.10.35 = 6500 m）。0.9.40 的 600 m 只有原版 1/10，轨道上的黑雾舰队根本够不到。
+            float rgs = SpaceRange();
+            // 坐标合法性上限：地面目标在行星半径量级；星区目标换算到行星本地后最远也就
+            // 射程量级。0.9.40 写死 6000，射程提到 6500 后会把近轨道目标误杀，这里跟着放宽。
+            float lim = Mathf.Max(6000f, rgs * 1.5f);
 
             for (int i = 1; i < cursor; i++)
             {
@@ -819,7 +816,7 @@ namespace LogisticsHub
 
                 Vector3 p = (Vector3)e.pos;
                 // 星区坐标/异常坐标直接排除（行星本地目标的坐标都在行星半径量级内）
-                if (Mathf.Abs(p.x) > 6000f || Mathf.Abs(p.z) > 6000f || Mathf.Abs(p.y) > 6000f)
+                if (Mathf.Abs(p.x) > lim || Mathf.Abs(p.z) > lim || Mathf.Abs(p.y) > lim)
                     continue;
 
                 float height = p.y - origin.y;
@@ -852,6 +849,9 @@ namespace LogisticsHub
             float radius = factory.planet != null ? factory.planet.realRadius : 200f;
             Vector3 originDir = origin.normalized;
 
+            int hiveCount = 0, inRange = 0;
+            float nearD2 = float.MaxValue, nearAlt = 0f;
+
             for (int i = 1; i < scur; i++)
             {
                 ref EnemyData e = ref spool[i];
@@ -863,6 +863,28 @@ namespace LogisticsHub
                 if (!sector.IsHiveAstro(e.originAstroId))
                     continue;
 
+                // 只处理本星系的母巢：sector.enemyPool 是全银河共用的池，后期存档里
+                // 其它星系的母巢单位可能有上万条 —— 全部做一遍宇宙坐标换算会拖帧，
+                // 原版 DFSDynamicHashSystem 也只遍历 this.planetData.star 名下的母巢。
+                if (sector.dfHivesByAstro != null)
+                {
+                    int hi = e.originAstroId - 1000000;
+                    if (hi >= 0 && hi < sector.dfHivesByAstro.Length)
+                    {
+                        EnemyDFHiveSystem hive = sector.dfHivesByAstro[hi];
+                        if (hive != null && hive.starData != null &&
+                            hive.starData.id != factory.planet.star.id)
+                            continue;
+                    }
+                }
+
+                // 中继站：原版属于「上层空域」，磁化电浆炮默认不打 —— 打中继站会快速
+                // 拉高母巢威胁、可能招来整巢报复（见 Plugin.AttackRelay）。
+                if (e.dfRelayId > 0 && !Plugin.AttackRelay)
+                    continue;
+
+                hiveCount++;
+
                 // 星区坐标 → 行星本地坐标。e.pos 是它所属天体（astroId）的本地坐标，
                 // 先换到宇宙坐标，再换到本行星的本地坐标（与 DFSDynamicHashSystem.GameTick
                 // 完全同一套调用）。
@@ -870,8 +892,8 @@ namespace LogisticsHub
                 sector.TransformFromAstro_ref(e.astroId, out VectorLF3 upos, ref lpos);
                 sector.InverseTransformToAstro_ref(factory.planet.astroId, ref upos, out VectorLF3 lf);
                 Vector3 p = (Vector3)lf;
-                if (p.sqrMagnitude < 1e-4f || Mathf.Abs(p.x) > 6000f ||
-                    Mathf.Abs(p.z) > 6000f || Mathf.Abs(p.y) > 6000f)
+                if (p.sqrMagnitude < 1e-4f || Mathf.Abs(p.x) > lim ||
+                    Mathf.Abs(p.z) > lim || Mathf.Abs(p.y) > lim)
                     continue;
 
                 // 高度按「离地表的径向距离」算（星区敌人的 pos 是行星本地坐标，
@@ -880,28 +902,125 @@ namespace LogisticsHub
                 if (alt < -5f)
                     continue;                       // 已沉进行星体（降落/回收中），不追
 
-                bool air = alt >= C.PlasmaAirHeight;
-                float r = air ? rgs : rg;
                 float d2 = (p - origin).sqrMagnitude;
-                if (d2 > r * r)
-                    continue;
-                // 高空目标再加一道视界粗判：行星另一侧的不追（本行星半径只有 ~200 m，
-                // 600 m 射程理论上能「隔着星球」锁到背面的舰队，原版靠俯仰角限制挡这个）。
-                if (air && Vector3.Dot(p.normalized, originDir) < -0.2f)
+                if (d2 < nearD2)
+                {
+                    nearD2 = d2;
+                    nearAlt = alt;
+                }
+
+                // 视界：从站基座看出去，目标必须在基座切平面以上。
+                // 0.9.40 用的是「与站址径向夹角 < 101°」的粗判 —— 600 m 射程时还看不出
+                // 问题；现在射程按原版改成 6500 m，能覆盖小半个行星，行星背面/地平线
+                // 以下的舰队会被「隔着星球」锁定，必须按切平面判。
+                if (Vector3.Dot(p - origin, originDir) < 0f)
                     continue;
 
+                if (d2 > rgs * rgs)
+                    continue;
+
+                inRange++;
                 AddTgt(buf, ref n, new Tgt
                 {
                     Id = i,
                     AstroId = e.originAstroId,
                     Pos = p,
-                    Air = air,
+                    // 【0.9.43】星区目标（轨道/太空）一律归塔顶电浆炮：基座激光塔只打
+                    // 地面，140 m 射程也够不到轨道目标。
+                    Air = true,
                     Height = alt,
                     Dist2 = d2,
                 });
             }
+
+            LogSpaceScan(scur, hiveCount, inRange, nearD2, nearAlt, rgs);
             return n;
         }
+
+        /// <summary>
+        /// 【0.9.43】塔顶电浆炮的太空监控范围，直接取原版磁化电浆炮 prefab 的
+        /// <c>turretSpaceAttackRange</c>（0.10.35 = 6500 m）。
+        ///
+        /// 为什么不能写死：0.9.40 拍了个 600 m，而原版
+        /// <c>TurretComponent.CheckTargetValidBeforeShoot</c> 对星区目标用的是
+        /// <c>spaceAttackRange²</c>；黑雾舰队在行星轨道上 1000~6000 m 就开始对地轰炸
+        /// （<c>EnemyUnitComponent</c> 的轨道炮击），600 m 的圈永远够不到 ——
+        /// 实机上就是「塔顶武器完全不会攻击太空黑雾」。
+        /// 原版电浆炮（<c>ETurretType.Plasma</c>）只有一种，扫 LDB 取最大值即可，
+        /// 语言 / ID 变动都不受影响；读不到时退回 <see cref="C.TurretRangeSpace"/>。
+        /// </summary>
+        private static float SpaceRange()
+        {
+            if (_spaceRange > 0f)
+                return _spaceRange;
+
+            float v = 0f;
+            try
+            {
+                ItemProto[] items = LDB.items?.dataArray;
+                if (items != null)
+                {
+                    for (int i = 0; i < items.Length; i++)
+                    {
+                        ItemProto it = items[i];
+                        if (it == null || it.prefabDesc == null || !it.prefabDesc.isTurret)
+                            continue;
+                        if (it.prefabDesc.turretType != ETurretType.Plasma)
+                            continue;
+                        float r = it.prefabDesc.turretSpaceAttackRange;
+                        if (r > v)
+                            v = r;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning("读取原版电浆炮射程失败: " + e.Message);
+            }
+
+            if (v < 100f)
+                v = C.TurretRangeSpace;
+            _spaceRange = v;
+
+            if (!_rangeLogged)
+            {
+                _rangeLogged = true;
+                Plugin.Log.LogInfo("塔顶射程: 太空 " + v.ToString("0") + " m（原版磁化电浆炮 prefab 的 " +
+                                   "turretSpaceAttackRange，与原版 Search_Plasma 同一口径）/ 基座 " +
+                                   C.TurretRange.ToString("0") + " m 只打地面");
+            }
+            return v;
+        }
+
+        private static float _spaceRange;
+        private static bool _rangeLogged;
+
+        /// <summary>
+        /// 【0.9.43】星区扫描诊断：只有当本星系母巢有单位在行星本地坐标里时才打，
+        /// 5 s 一条。用于实机确认「塔顶到底看没看见太空黑雾」：
+        /// 池 = 星区 enemyCursor；母巢目标 = originAstroId 属于母巢的条目；
+        /// 最近 = 换算到行星本地后离站最近的目标；进入范围 = 通过视界 + 射程过滤的数量。
+        /// </summary>
+        private static void LogSpaceScan(int poolCursor, int hiveCount, int inRange,
+                                         float nearD2, float nearAlt, float range)
+        {
+            if (hiveCount <= 0)
+                return;
+            bool near = nearD2 < float.MaxValue;
+            float now = Time.time;
+            if (now < _spaceLogT + (near ? 5f : 30f))
+                return;
+            _spaceLogT = now;
+
+            string nearText = !near
+                ? "超出行星本地坐标范围"
+                : Mathf.Sqrt(nearD2).ToString("0") + " m（离地 " + nearAlt.ToString("0") + " m）";
+            Plugin.Log.LogInfo("星区扫描: 池=" + poolCursor + " 母巢目标=" + hiveCount +
+                               " 最近=" + nearText + " 塔顶射程=" + range.ToString("0") +
+                               " m 进入范围=" + inRange);
+        }
+
+        private static float _spaceLogT = -10f;
 
         /// <summary>候选表插入：满了就顶掉最远的一个。</summary>
         private static void AddTgt(Tgt[] buf, ref int n, in Tgt t)
@@ -1104,19 +1223,29 @@ namespace LogisticsHub
                 // 【0.9.25】三根炮管 → 三条射线（C.TurretMuzzles 里的三个管口点）。
                 if (gun == null)
                 {
-                    try
+                    // 【0.9.46】基座激光吃电之后，没电就**连射线一起收掉** ——
+                    // 否则画面是「光柱亮着打在怪身上」，实际一发都没结算（伤害在下面
+                    // 的弹药检查里被 continue 掉了），玩家会以为「打了不掉血」是 BUG。
+                    if (sc.energy < C.LaserShotEnergy)
                     {
-                        for (int b = 0; b < C.TurretMuzzles.Length; b++)
-                            LaserAim(factory, rig, t, b, tg.Pos);
+                        LaserStop(rig, t);
                     }
-                    catch (Exception e)
+                    else
                     {
-                        // 原版池的接口是 internal 实现，跨版本可能改；出错只停射线，
-                        // 不影响扣血与扫掠（否则一发异常会把整座站的战斗打断）。
-                        if (!_laserErr)
+                        try
                         {
-                            _laserErr = true;
-                            Plugin.Log.LogError("原版激光射线更新失败（射线停用，伤害照常）: " + e);
+                            for (int b = 0; b < C.TurretMuzzles.Length; b++)
+                                LaserAim(factory, rig, t, b, tg.Pos);
+                        }
+                        catch (Exception e)
+                        {
+                            // 原版池的接口是 internal 实现，跨版本可能改；出错只停射线，
+                            // 不影响扣血与扫掠（否则一发异常会把整座站的战斗打断）。
+                            if (!_laserErr)
+                            {
+                                _laserErr = true;
+                                Plugin.Log.LogError("原版激光射线更新失败（射线停用，伤害照常）: " + e);
+                            }
                         }
                     }
                 }
@@ -1130,17 +1259,60 @@ namespace LogisticsHub
                 // 口径与 TurretComponent.Shoot_Laser / Shoot_Plasma 完全一致：
                 // 原版就是 `基础伤害 × history.energyDamageScale`，所以激光塔和电浆炮
                 // 在原版里本来就同吃这一条，本站照抄（见 MiningTech.EnergyWeaponMul）。
+                //
+                // 【0.9.45】再叠一层玩家配置 <c>Turret/DamageMul</c>（默认 1.0）。
+                // 它**只乘伤害**，不乘电浆弹能耗 —— 能耗真值固定是 C.PlasmaShotEnergy，
+                // 玩家调伤害不该顺手把电费改掉（那会让「塔顶供电」那本账对不上）。
                 int dmg = Mathf.RoundToInt(
-                    (air ? C.TurretDamageSpace : C.TurretDamage) * MiningTech.EnergyWeaponMul);
+                    (air ? C.TurretDamageSpace : C.TurretDamage) *
+                    MiningTech.EnergyWeaponMul * Plugin.DamageMul);
+                if (dmg < 1)
+                    dmg = 1;   // 配置写成 0.1 也至少打 1，别让炮塔「打了不掉血」
 
                 if (air)
                 {
                     // 电浆炮要有「弹药」才打得出去：每发扣 C.PlasmaShotEnergy 的站内电量。
                     // 电量不够就这一发不打（连伤害一起跳过），面板的电池读数就是玩家要的弹仓。
-                    if (!PlasmaShot(factory, sc, rig, t, tg.Pos))
+                    // 【0.9.44】伤害改由原版弹丸（GeneralProjectile）命中时结算，所以
+                    // Fired 之后不再调 Fire()，否则一发会扣两次血；只有弹丸系统挂不上
+                    // （池为空 / 目标已出池）时才退回即时结算。
+                    ShotResult shot = PlasmaShot(factory, sc, rig, t, tg, dmg);
+                    if (shot == ShotResult.NoAmmo)
                         continue;
-                    LogPlasmaDamage(dmg);
+                    if (shot == ShotResult.Failed)
+                        Fire(factory, tg.Id, tg.AstroId, dmg);
+                    else
+                        LogPlasmaDamage(dmg);
+                    continue;
                 }
+
+                // 【0.9.46】基座激光也要「上子弹」了：每发扣 C.LaserShotEnergy（15 MJ）站内电量。
+                // 和塔顶电浆弹是同一个电池（StationComponent.energy），电量不足这一发就不打
+                // —— 连伤害一起跳过，否则会出现「没电照样掉血」的假象。
+                // 电量恢复后清掉停火标记（和 PlasmaShot 里的写法对称）。
+                if (sc.energy < C.LaserShotEnergy)
+                {
+                    if (rig.NoAmmo != null && t < rig.NoAmmo.Length && !rig.NoAmmo[t])
+                    {
+                        rig.NoAmmo[t] = true;
+                        if (!_laserNoAmmoLogged)
+                        {
+                            _laserNoAmmoLogged = true;
+                            Plugin.Log.LogInfo("基座激光停火: 站 id=" + sc.id + " 电量不足（" + sc.energy +
+                                               " J < 每发 " + C.LaserShotEnergy + " J）——" +
+                                               "接电网 / 建在地热上 / 往左列第 " + (C.FuelSlot + 1) +
+                                               " 格补氘核燃料棒（核电 " +
+                                               C.FusionPowerMw.ToString("0.#") + " MW）即可");
+                        }
+                    }
+                    continue;
+                }
+                if (rig.NoAmmo != null && t < rig.NoAmmo.Length)
+                    rig.NoAmmo[t] = false;
+                sc.energy -= C.LaserShotEnergy;
+                if (sc.energy < 0)
+                    sc.energy = 0;
+
                 Fire(factory, tg.Id, tg.AstroId, dmg);
             }
         }
@@ -1258,6 +1430,25 @@ namespace LogisticsHub
                                        : "（不足，按功率降速 → 约 " +
                                          (total * 1e6f / C.PlasmaShotEnergy).ToString("0.0") + " 发/s）")
                                    : ""));
+            // 【0.9.46】基座激光也吃站内电量之后，功率账要两条一起看 ——
+            // 只报塔顶会让玩家误以为「够用了」，其实基座还在抢同一个电池。
+            float laserCount = Mathf.Max(1, C.TurretCount - C.PlasmaTopCount);
+            float laserNeed = laserCount / Mathf.Max(0.05f, C.TurretFireInterval) *
+                              C.LaserShotEnergy / 1e6f;
+            Plugin.Log.LogInfo("基座供电: 激光 " + (C.LaserShotEnergy / 1e6f).ToString("0.##") +
+                               "MJ/发，" + laserCount.ToString("0") + " 座满速需 " +
+                               laserNeed.ToString("0.0") + "MW" +
+                               (on
+                                   ? (total >= laserNeed
+                                       ? "（够用）"
+                                       : "（不足，按功率降速 → 约 " +
+                                         (total * 1e6f / C.LaserShotEnergy).ToString("0.0") + " 发/s）")
+                                   : "（断电）") +
+                               "｜塔顶+基座合计满速 " + (need + laserNeed).ToString("0.0") +
+                               "MW，当前供电 " + total.ToString("0.0") + "MW" +
+                               (total >= need + laserNeed
+                                   ? "（刚够两条线满火力）"
+                                   : "（缺 " + (need + laserNeed - total).ToString("0.0") + "MW）"));
         }
 
         // ================= 原版「磁化电浆炮」的弹丸 =================
@@ -1280,32 +1471,57 @@ namespace LogisticsHub
                                " → 塔顶单发 " + dmg + " 伤害（与激光塔同吃原版「能量武器伤害」升级，每级 +10%）");
         }
 
+        /// <summary>塔顶电浆炮一次开火的结果。</summary>
+        private enum ShotResult
+        {
+            /// <summary>弹丸已挂上，伤害由弹丸命中时结算（调用方不要再调 Fire）。</summary>
+            Fired,
+            /// <summary>站内电量不足，这一发不打（「没子弹了」）。</summary>
+            NoAmmo,
+            /// <summary>弹丸系统不可用（池为空 / 坐标换算失败），调用方退回即时结算。</summary>
+            Failed,
+        }
+
         /// <summary>
-        /// 塔顶电浆炮开火：先扣站内电量（这就是它的「弹药」），再往
-        /// <c>skillSystem.turretCannonades</c> 池里挂一发原版电浆弹，
-        /// 弹丸从炮口飞到目标点、命中时炸出原版粒子（`hitEffects[10]` + 次级 `[11]`）。
+        /// 【0.9.44】塔顶电浆炮开火：走原版「磁化电浆炮」的**真弹丸**链路
+        /// （<c>SkillSystem.turretPlasmas</c>，<see cref="GeneralProjectile"/>）。
         ///
-        /// 【0.9.25】「怎么上子弹」的答案就是这里：原版磁化电浆炮本来就不吃实体弹药
-        /// （DSP 全部炮塔都是能量武器），所以本站也不让玩家去找弹链，而是**真的吃电** ——
-        /// 每发从 <c>StationComponent.energy</c>（和货船起飞同一个电池）里扣
-        /// <see cref="C.PlasmaShotEnergy"/>。电量来源只有两条：接着电网充电、或建在地热上。
-        /// 电量不足时这一发直接不打（返回 false，调用方连伤害一起跳过），
-        /// 实机上就是「没子弹了」的表现。
-        ///
-        /// 弹丸本身只借表现：<c>damage = 0</c>、<c>caster.id = 0</c>。
-        /// 为什么：这个池在弹丸落点会遍历半径内的敌人逐个
-        /// <c>DamageGroundObjectByLocalCaster</c>；如果给真伤害就是**双重扣血**
-        /// （我们的 <see cref="Fire"/> 已经结算过一次），给 caster 就是每发都把
-        /// lastCaster 抢一遍（无限仇恨）。清空之后它只剩爆炸特效。
+        /// <para>
+        /// 【为什么换池】0.9.25~0.9.43 是往 <c>skillSystem.turretCannonades</c>（原版加农炮的
+        /// 弹道池，元素是 <see cref="LocalCannonade"/>）里塞「伤害 0 的表现弹」。但那个池在
+        /// <c>SkillSystem</c> 里只有 <c>DataPool</c>、**没有对应的 DataPoolRenderer** ——
+        /// 原版加农炮的炮弹本来就只靠落点特效表现，本身不画网格。结果就是实机上
+        /// 「炮塔转了、瞄上了、炮口没有火花、天上没有弹丸」，玩家看到的就是
+        /// 「塔顶武器根本不开火」。
+        /// </para>
+        /// <para>
+        /// 【原版怎么做】<c>TurretComponent.Shoot_Plasma</c> 真正的弹丸在
+        /// <c>turretPlasmas</c>（<c>DataPoolRenderer&lt;GeneralProjectile&gt;</c>，有网格 / 材质 /
+        /// 拖尾 / 命中爆炸 33），坐标是**宇宙坐标**（uPos/uVel），所以 1.8 km 外甚至
+        /// 轨道上的目标都飞得到、看得见。这里整段照抄：
+        ///   · 炮口世界坐标 → 宇宙坐标（<c>galaxyAstro.uPos + R · muzzle − 行星速度/60</c>）；
+        ///   · 目标宇宙坐标 + 目标速度做提前量（eta = 距离 / 速度，速度 = 距离 × 5，夹 200~20000）；
+        ///   · 母巢目标再按 <c>hiveAstroOrbit.GetEstimatePointOffset(eta)</c> 补一次提前量
+        ///     （原版同一处，舰队是绕着巢心转的）；
+        ///   · <c>caster = 站体实体</c>（<c>sc.entityId</c>）：原版这里放炮塔实体 id，
+        ///     弹丸与命中特效靠它定位；之前写 0，等于告诉渲染器「没有发射者」；
+        ///   · 伤害交给弹丸命中时结算（<c>GeneralProjectile</c> 命中 → <c>DamageObject</c>），
+        ///     母巢减伤 / 巢经验 / 血条预扣全部由原版处理，和激光塔不重复扣血。
+        /// </para>
+        /// <para>
+        /// 弹药仍然是**站内电量**：每发扣 <see cref="C.PlasmaShotEnergy"/>（和货船起飞同一个电池），
+        /// 不用找实体弹链 —— 只有真正挂上弹丸才扣电。
+        /// </para>
         /// </summary>
-        private bool PlasmaShot(PlanetFactory factory, StationComponent sc, Rig rig, int t, Vector3 world)
+        private ShotResult PlasmaShot(PlanetFactory factory, StationComponent sc, Rig rig, int t, in Tgt tg, int dmg)
         {
             SkillSystem ss = factory.skillSystem;
-            if (ss == null || sc == null)
-                return false;
-            DataPool<LocalCannonade> pool = ss.turretCannonades;
+            SpaceSector sector = factory.sector;
+            if (ss == null || sector == null || sc == null || factory.planet == null)
+                return ShotResult.Failed;
+            DataPoolRenderer<GeneralProjectile> pool = ss.turretPlasmas;
             if (pool == null || pool.buffer == null)
-                return false;
+                return ShotResult.Failed;
 
             // ---- 弹药 = 站内电量 ----
             if (sc.energy < C.PlasmaShotEnergy)
@@ -1323,59 +1539,109 @@ namespace LogisticsHub
                                            C.FusionPowerMw.ToString("0.#") + " MW）即可");
                     }
                 }
-                return false;
+                return ShotResult.NoAmmo;
             }
             if (rig.NoAmmo != null && t < rig.NoAmmo.Length)
                 rig.NoAmmo[t] = false;
-            sc.energy -= C.PlasmaShotEnergy;
-            if (sc.energy < 0)
-                sc.energy = 0;
+
+            int entityId = sc.entityId;
+            if (entityId <= 0)
+                return ShotResult.Failed;      // 没有实体就没有炮口，弹丸画不出来
 
             try
             {
-                Vector3 from = Muzzle(rig, t);
+                int astroId = factory.planet.astroId;
+
+                // 行星本地目标（行星池里的飞行单位）带行星 astroId，星区目标带母巢 astroId：
+                // GetObjectUPositionAndVelocity 靠它区分两个池。
+                SkillTarget target = new SkillTarget
+                {
+                    type = ETargetType.Enemy,
+                    id = tg.Id,
+                    astroId = tg.AstroId > 0 ? tg.AstroId : astroId,
+                };
+                if (!ss.GetObjectUPositionAndVelocity(ref target,
+                                                     out VectorLF3 targetUPos, out Vector3 targetUVel))
+                    return ShotResult.Failed;  // 目标已经出池
+
+                Vector3 muzzle = Muzzle(rig, t);
+                AstroData galaxyAstro = sector.galaxyAstros[astroId];
+                galaxyAstro.VelocityU(ref muzzle, out Vector3 astroVel);
+                VectorLF3 upos = galaxyAstro.uPos +
+                                 Maths.QRotateLF(galaxyAstro.uRot, (VectorLF3)muzzle) -
+                                 (VectorLF3)astroVel * (1f / 60f);
+
+                Vector3 diff = (Vector3)(targetUPos - upos);
+                double dist = Math.Sqrt((double)diff.x * diff.x +
+                                        (double)diff.y * diff.y +
+                                        (double)diff.z * diff.z);
+                double speed = dist * 5.0;
+                if (speed < 200.0) speed = 200.0;
+                else if (speed > 20000.0) speed = 20000.0;
+                float eta = (float)(dist / speed) - (1f / 60f);
+                if (eta < 1e-3f) eta = 1e-3f;
+
+                // 母巢舰队是绕巢心转的，按 eta 预估一下提前量（原版 Shoot_Plasma 同一处）。
+                if (sector.IsHiveAstro(target.astroId))
+                {
+                    int hi = target.astroId - 1000000;
+                    if (sector.dfHivesByAstro != null && hi >= 0 && hi < sector.dfHivesByAstro.Length)
+                    {
+                        EnemyDFHiveSystem hive = sector.dfHivesByAstro[hi];
+                        if (hive != null && hive.starData != null)
+                        {
+                            Vector3 n = (Vector3)(hive.starData.uPosition - targetUPos).normalized;
+                            diff += n * hive.hiveAstroOrbit.GetEstimatePointOffset(eta);
+                        }
+                    }
+                }
+
                 int id;
                 using (pool.Add(out id))
                 {
-                    ref LocalCannonade c = ref pool.buffer[id];
-                    c.astroId = factory.planet.astroId;
-                    c.hitIndex = 10;          // 原版电浆弹的命中火花组
-                    c.minorHitIndex = 11;
-                    c.speed = 4f;
-                    c.targetPos = world;
-                    c.distance = Vector3.Distance(from, world);
-                    c.damage = 0;             // 只做表现（伤害在 Fire() 里）
-                    // 【关键】半径必须给 0：`LocalCannonade.TickSkillLogic` 在落点会遍历
-                    // 半径内的敌人逐个 DamageGroundObjectByLocalCaster，而那个函数对
-                    // 「挂在黑雾基地下的敌人」有一条 `damage = Max(damage, 100/slice)`
-                    // 的下限保护 —— 也就是说 damage=0 传进去会被抬成 **100 真伤害**，
-                    // 等于我们打一发扣两发。半径 0 之后整个循环一次都不进，
-                    // 命中特效（hitIndex）在它之前就已经播了，画面不受影响。
-                    c.blastRadius0 = 0f;
-                    c.blastRadius1 = 0f;
-                    c.blastFalloff = 1f;
-                    c.mask = ETargetTypeMask.Enemy;
-                    c.caster.id = 0;
-                    c.caster.type = ETargetType.None;
-                    c.life = 3;
+                    ref GeneralProjectile p = ref pool.buffer[id];
+                    p.astroId = astroId;
+                    p.hitIndex = 33;               // 原版电浆炮的命中特效组（Shoot_Plasma 同值）
+                    p.uPos = upos;
+                    p.uVel = (diff + targetUVel * eta) / eta;
+                    p.uVelObj = p.uVel - astroVel;
+                    p.target = target;
+                    p.caster.type = ETargetType.None;
+                    p.caster.id = entityId;        // 原版=炮塔实体；这里=站体实体（决定炮口/特效位置）
+                    p.caster.astroId = astroId;
+                    p.damage = dmg;
+                    p.damageRange = 0f;
+                    p.damageFalloff = 0f;
+                    p.mask = ETargetTypeMask.Enemy;
+                    p.life = 120;
+                    p.lifemax = 120;
+                    // 原版在这里预扣「即将命中」的血量，血条才会在飞行途中就变短。
+                    p.damageIncoming = ss.CalculateDamageIncoming(ref target, dmg);
+                    p.targetCombatStatId = ss.AddCombatStatHPIncoming(ref target, -p.damageIncoming);
                 }
+
+                sc.energy -= C.PlasmaShotEnergy;   // 真挂上了才扣电
+                if (sc.energy < 0)
+                    sc.energy = 0;
+
                 if (!_shellLogged)
                 {
                     _shellLogged = true;
-                    Plugin.Log.LogInfo("电浆炮弹丸: 已接入原版 turretCannonades" +
-                                       "（网格/材质/命中爆炸全部由 SkillSystem 驱动，damage=0 只做表现；" +
-                                       "弹药=站内电量，每发 " + (C.PlasmaShotEnergy / 1_000_000) + " MJ）");
+                    Plugin.Log.LogInfo("电浆炮弹丸: 已接入原版 turretPlasmas（GeneralProjectile，" +
+                                       "与 TurretComponent.Shoot_Plasma 同一条链路：宇宙坐标 + 母巢提前量 + " +
+                                       "caster=站体实体，命中特效 33，伤害由弹丸命中时结算）；" +
+                                       "弹药=站内电量，每发 " + (C.PlasmaShotEnergy / 1_000_000) + " MJ");
                 }
-                return true;
+                return ShotResult.Fired;
             }
             catch (Exception e)
             {
                 if (!_shellErr)
                 {
                     _shellErr = true;
-                    Plugin.Log.LogError("电浆炮弹丸发射失败（弹丸停用，伤害照常）: " + e);
+                    Plugin.Log.LogError("电浆炮弹丸发射失败（退回即时结算）: " + e);
                 }
-                return false;
+                return ShotResult.Failed;
             }
         }
 

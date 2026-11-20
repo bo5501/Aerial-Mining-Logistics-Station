@@ -1131,10 +1131,19 @@ namespace LogisticsHub
                 // 不再是「矿物利用每级 +5%」那套自造效果。倍率为 1.00（没升级）时整行变暗，
                 // 和中文化「未解锁」的读感保持一致。
                 int wpct = MiningTech.WeaponPct;
-                int dmgLaser = Mathf.RoundToInt(C.TurretDamage * MiningTech.EnergyWeaponMul);
-                int dmgPlasma = Mathf.RoundToInt(C.TurretDamageSpace * MiningTech.EnergyWeaponMul);
+                // 0.9.45：面板必须和实际开火算的是同一个数 —— 实际是
+                // `基础 × 能量武器倍率 × Plugin.DamageMul`（见 StationTurrets 的 dmg 计算），
+                // 少乘一层就会出现「面板写 640、实打 1280」的对不上。
+                int dmgLaser = Mathf.RoundToInt(C.TurretDamage * MiningTech.EnergyWeaponMul * Plugin.DamageMul);
+                int dmgPlasma = Mathf.RoundToInt(C.TurretDamageSpace * MiningTech.EnergyWeaponMul * Plugin.DamageMul);
                 SetTxt(_weapon, "能量+" + wpct + "%");
-                SetTxt(_weaponR, "激光" + dmgLaser + " · 电浆" + dmgPlasma + " · 弹" +
+                // 0.9.46：基座激光也开始吃站内电量（15 MJ/发），所以「每发耗电」不再只有
+                // 电浆弹一个数 —— 改成「伤害/耗电」成对写，两条线各自的账一眼能对上：
+                //   激光640/15MJ · 电浆3600/20MJ
+                // 宽度：右格 245 px，实测这一串约 210 px（13 px 字号），不顶边。
+                SetTxt(_weaponR, "激光" + dmgLaser + "/" +
+                                 (C.LaserShotEnergy / 1_000_000.0).ToString("0.#") + "MJ · 电浆" +
+                                 dmgPlasma + "/" +
                                  (C.PlasmaShotEnergy / 1_000_000.0).ToString("0.#") + "MJ");
                 _weapon.color = wpct > 0 ? TechLv : TextFaint;
                 _weaponR.color = wpct > 0 ? TextDim : TextFaint;

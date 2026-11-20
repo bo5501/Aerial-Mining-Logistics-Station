@@ -10,7 +10,7 @@ namespace LogisticsHub
     {
         public const string Guid = "com.psd.logisticshub";
         public const string Name = "空中采矿机物流运输站";
-        public const string Version = "0.9.42";
+        public const string Version = "0.9.43";
 
         // ---- id 分配（避开「星际能量枢纽塔」666/8000/300 与本体重载区间）----
         public const int ModelId = 673;
@@ -395,21 +395,55 @@ namespace LogisticsHub
         public const bool TurretCombat = true;
         // 【0.9.40】监控范围（玩家口中的「只有黑雾进圈才开打」就是这两条）：
         // 目标每 0.35 s 扫一次，超出对应圈的直接不进候选表 —— 基座激光塔不打圈外
-        // 的地面黑雾，塔顶电浆炮不打 600 m 外的空中/太空目标（原版磁化电浆炮
+        // 的地面黑雾，塔顶电浆炮不打射程外的空中/太空目标（原版磁化电浆炮
         // Search_Plasma 也是同款「先按 turretSpaceAttackRange 过滤」的口径）。
         public const float TurretRange = 140f;          // 基座激光塔监控范围（m，只打地面目标）
-        public const int TurretDamage = 160;            // 对地单发伤害
-        public const float TurretFireInterval = 0.22f;  // 对地射击间隔（s）
-        public const float TurretRangeSpace = 600f;     // 塔顶电浆炮监控范围（m，打空中/太空目标）
-        public const int TurretDamageSpace = 900;       // 电浆炮单发伤害
+        // 【0.9.45】玩家选定「方案 B」：两处基础伤害同时翻倍。
+        //   基座激光 160 → 320，间隔 0.22 → 0.18（4 座合计 DPS 5818 → 14222）。
+        //   基座**不吃站内电量**（原版高频激光塔就是纯电武器，靠建筑自身供电），
+        //   所以这一档是纯收益，不进「电浆弹能耗」那本账。
+        //   实际单发仍要乘 history.energyDamageScale（能量武器伤害升级），
+        //   当前存档 ×2.00，所以面板显示 640。
+        public const int TurretDamage = 320;            // 对地单发伤害（基础值，再 × energyDamageScale）
+        public const float TurretFireInterval = 0.18f;  // 对地射击间隔（s）
+        /// <summary>
+        /// 塔顶电浆炮的太空监控范围。**只作为读不到原版数据时的兜底**：
+        /// 运行时由 <c>StationTurrets.SpaceRange()</c> 直接读原版磁化电浆炮 prefab 的
+        /// <c>turretSpaceAttackRange</c>（0.10.35 = 6500 m），与原版
+        /// <c>TurretComponent.Search_Plasma / CheckTargetValidBeforeShoot</c> 同一口径。
+        ///
+        /// 0.9.40 这里写的是 600 m —— 只有原版射程的 1/10。黑雾舰队在行星轨道上
+        /// 1000~6000 m 就开始对地轰炸（<c>EnemyUnitComponent</c> 的轨道炮击），
+        /// 600 m 的圈永远够不到，实机表现就是「塔顶武器完全不会攻击太空黑雾」。
+        /// </summary>
+        public const float TurretRangeSpace = 6500f;
+        // 【0.9.45】方案 B：电浆炮基础单发 900 → 1800（当前存档 ×2.00 → 实发 3600）。
+        //   射速（1.10 s）刻意**不动**：塔顶是「按功率降速」的，提高射速只会更快把
+        //   站内电池抽干、实际 DPS 反而不涨；提单发才是这个模型下唯一有效的加强。
+        //   代价见 C.PlasmaShotEnergy —— 每发能耗同步翻倍（10 → 20 MJ）。
+        public const int TurretDamageSpace = 1800;      // 电浆炮单发伤害（基础值，再 × energyDamageScale）
         public const float TurretFireIntervalSpace = 1.10f;
         /// <summary>
         /// 【0.9.24】「打不动就放」：同一目标连续开火这么多秒还没击毁，判定为打不动的
         /// （无敌单位 / 护盾里 / 别的 mod 的怪），拉黑 <see cref="TurretGiveUpHold"/> 秒换目标。
-        /// 上限：8 s × 4 座 × 160 伤害 = 5120，足够打死普通黑雾兵，又不会死磕。
+        /// 上限：0.9.45 起基座单发 320 / 间隔 0.18 s，8 s 内一座能打 44 发 ≈ 14,222 伤害，
+        /// 足够打死普通黑雾兵，又不会死磕（旧口径 8 s × 4 座 × 160 = 5120 已过时）。
         /// </summary>
         public const float TurretGiveUpSeconds = 8f;
         public const float TurretGiveUpHold = 6f;
+
+        // ---- 0.9.46：基座激光也吃站内电量（15 MJ/发）----
+        // 玩家要求：「基座激光每发能耗 15，需要吃站内电量」。
+        // 之前基座是白打的（原版高频激光塔靠建筑自身供电，不占站内电池），
+        // 0.9.45 伤害翻倍之后它成了纯收益，这次把电费补上，两条武器线才同一本账。
+        //
+        // 【代价必须先看清】4 座 × 1/0.18 s = 22.2 发/s × 15 MJ ≈ **333 MW**，
+        // 和塔顶电浆炮的 327 MW 合起来满速要 **660 MW** —— 这已经是一整颗戴森球的量级。
+        // 实机上（82 MW 的站）基座只能打到约 5.5 发/s（DPS 3,520），
+        // 比 0.9.45「不吃电、14,222 DPS」明显更弱，这是玩家明确要的取舍。
+        // 想兼顾就调小这个常数：5 MJ/发 → 111 MW（满速 DPS 降到 3,520 但供电轻松），
+        // 3 MJ/发 → 67 MW。
+        public const long LaserShotEnergy = 15_000_000L;
 
         // ---- 0.9.25：电浆炮「上子弹」= 塔顶电力 ----
         // 原版磁化电浆炮本来就不吃实体弹药（DSP 全系炮塔都是能量武器），所以塔顶这 18 座
@@ -421,7 +455,18 @@ namespace LogisticsHub
         //   必须接电网（120 MW 充电上限 + 电池缓冲）或靠第 10 格的核聚变发电机补足 ——
         //   这正是玩家想要的「电浆炮是重武器、烧电」的读感。
         //   面板武器行会直接写「弹10MJ」，日志「塔顶供电: …」会算出当前功率够几发/s。
-        public const long PlasmaShotEnergy = 10_000_000L;
+        //
+        // 【0.9.45】方案 B 的配套：单发伤害 900 → 1800（翻倍），每发能耗同步 10 → **20 MJ**，
+        //   也就是「每 MJ 换多少伤害」这条比值保持不变 —— 强化的代价就是烧电。
+        //   代价要说清楚：18 座满速从 163.6 MW 涨到 **327.3 MW**。
+        //   好消息是**打母巢反而更划算**了：DamageObject 对母巢舰队是「每发固定减伤
+        //   巢等级×50」，发数越少被扣的总额越少 ——
+        //     旧：8.2 发/s × (1800−500) ≈ 10,660 DPS
+        //     新：4.1 发/s × (3600−500) ≈ 12,710 DPS（同样 82 MW 供电，+19%）
+        //   坏消息是打**小目标**会变慢：一发 3600 秒杀 800 血的小兵，剩下的 2800 是纯浪费，
+        //   而发数只有原来一半。所以「想清小兵」请靠基座激光（0.9.45 已提到 320/0.18s），
+        //   塔顶的定位就是重炮：打太空舰队、打母巢。
+        public const long PlasmaShotEnergy = 20_000_000L;
 
         // ---- 0.9.30：第 10 格 = 核电燃料格（氘核燃料棒 → 发电）----
         // 用户要求：「左列最后一个（第 10 个）卡槽做成核电发电机，只需要请求氘核燃料棒来发电」。
@@ -436,6 +481,9 @@ namespace LogisticsHub
         // 15 MW 只够约 1.5 发/s；100 MW 能到约 10 发/s，单棒塔终于有「重武器」的读感。
         // 代价是烧得快：氘棒 6 s / 反物质棒 72 s / 奇异湮灭棒 720 s，一格 100 根
         // 在 100 MW 下分别撑 10 分钟 / 2 小时 / 20 小时 —— 靠物流自动补货。
+        // 【0.9.45】单发能耗翻到 20 MJ 之后，100 MW 只够 5 发/s（18 座满速需 327 MW），
+        // 单棒塔从「接近满速」退回「半速」—— 这是方案 B 的直接代价，要满速就得
+        // 电网 120 MW 上限叠满 + 地热 + 核电三路一起上，或者多建几座塔分散。
         public const int FuelSlot = ManualSlots - 1;     // 9 = 面板左列第 10 格
         public const int FuelSlotMax = 100;              // 一格存 100 根（氘棒约 10 分钟满功率）
         public const float FusionPowerMw = 100f;         // 单塔核电输出（玩家指定 100 MW）

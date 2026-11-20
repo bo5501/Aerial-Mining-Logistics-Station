@@ -24,6 +24,27 @@ namespace LogisticsHub
         /// </summary>
         public static bool UseLdbToolIds;
 
+        /// <summary>
+        /// 【0.9.43】塔顶电浆炮是否主动打黑雾「中继站」（上层空域目标）。
+        /// 原版磁化电浆炮默认不打中继站：打掉中继站会快速拉高母巢威胁，可能引来整巢报复，
+        /// 所以默认 false，只打真正的太空舰队 / 攻击单位。
+        /// </summary>
+        public static bool AttackRelay;
+
+        /// <summary>
+        /// 【0.9.45】炮塔伤害总倍率（配置 <c>Turret/DamageMul</c>，默认 1.0）。
+        ///
+        /// 0.9.45 已经把基础值提到「方案 B」（基座 320 / 塔顶 1800，均再 × 原版能量武器升级）。
+        /// 这个配置是**额外**的一层，给两种场景用：
+        ///   · 玩家觉得还不够强，改 2.0 直接翻倍，不用等新版本；
+        ///   · 排查问题 / 做对比测试时调到 0.1，能看清是不是伤害本身导致的差异。
+        ///
+        /// 它只乘伤害、**不乘电浆弹能耗** —— 能耗的唯一真值是
+        /// <see cref="C.PlasmaShotEnergy"/>，不能让玩家调伤害顺手把电费也改了。
+        /// 取值夹在 0.1~20，防止配置写成 0 或负数把炮塔变成「打不死」。
+        /// </summary>
+        public static float DamageMul = 1f;
+
         private static Harmony _harmony;
         private static bool _iconApplied;
 
@@ -43,6 +64,36 @@ namespace LogisticsHub
             catch (Exception e)
             {
                 Log.LogWarning("读取配置失败: " + e.Message);
+            }
+
+            try
+            {
+                AttackRelay = Config.Bind("Turret", "AttackRelay", false,
+                    "塔顶电浆炮是否主动攻击黑雾「中继站」（原版里的上层空域目标）。\n" +
+                    "默认关闭：与原版磁化电浆炮一致 —— 打中继站会快速拉高母巢威胁，可能引来整巢报复。\n" +
+                    "开启后，中继站进入塔顶射程（原版电浆炮口径）就会被锁定。").Value;
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning("读取炮塔配置失败: " + e.Message);
+            }
+
+            try
+            {
+                DamageMul = Config.Bind("Turret", "DamageMul", 1f,
+                    "炮塔伤害总倍率（基座激光 + 塔顶电浆都乘这一条），默认 1.0。\n" +
+                    "0.9.45 的基础值：基座单发 320 / 间隔 0.18s，塔顶电浆单发 1800 / 间隔 1.10s，" +
+                    "再乘原版「能量武器伤害」升级倍率（每级 +10%）。\n" +
+                    "这里填 2.0 就是在这之上再翻倍。只影响伤害，" +
+                    "**不影响**电浆弹每发能耗（固定 20 MJ，见 C.PlasmaShotEnergy）。\n" +
+                    "取值会被夹在 0.1 ~ 20 之间。").Value;
+                if (DamageMul < 0.1f) DamageMul = 0.1f;
+                if (DamageMul > 20f) DamageMul = 20f;
+            }
+            catch (Exception e)
+            {
+                DamageMul = 1f;
+                Log.LogWarning("读取炮塔伤害倍率失败（按 1.0 处理）: " + e.Message);
             }
 
             try
